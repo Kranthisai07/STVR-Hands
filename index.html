@@ -1405,6 +1405,20 @@
       min-height: 96px;
     }
 
+    .field-error {
+      color: #f87171;
+      font-size: 0.75rem;
+      margin-top: 0.3rem;
+      font-family: 'DM Sans', sans-serif;
+      display: block;
+    }
+
+    .form-input.error,
+    .form-select.error {
+      border-color: rgba(248, 113, 113, 0.7) !important;
+      box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.15) !important;
+    }
+
     .btn-submit {
       width: 100%;
       padding: 1rem;
@@ -2498,7 +2512,7 @@
       <li><a href="#categories">Work</a></li>
       <li><a href="#creators">Creators</a></li>
       <li><a href="#contact">Contact</a></li>
-      <li><a href="#contact" class="nav-cta">Book a Shoot</a></li>
+      <li><a href="#bookingPanel" class="nav-cta">Book a Shoot</a></li>
     </ul>
     <div class="hamburger" id="hamburger" aria-label="Menu" role="button" tabindex="0">
       <span></span><span></span><span></span>
@@ -2535,7 +2549,7 @@
       </div>
 
       <div class="hero-ctas">
-        <a href="#contact" class="btn btn-solid">Book Your Shoot →</a>
+        <a href="#bookingPanel" class="btn btn-solid">Book Your Shoot →</a>
         <a href="https://www.youtube.com/@stvr__bharath" target="_blank" rel="noopener" class="btn btn-ghost"><svg
             width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="flex-shrink:0">
             <path
@@ -2929,7 +2943,7 @@
           <div class="response-badge">⚡ We respond within 2 hours</div>
         </div>
 
-        <div class="booking-panel glass reveal" style="transition-delay:.16s">
+        <div class="booking-panel glass reveal" id="bookingPanel" style="transition-delay:.16s">
           <form id="bookingForm" novalidate>
             <div class="form-grid-2">
               <div class="form-group">
@@ -3299,8 +3313,75 @@
     ----------------------------------------------------------- */
     document.getElementById('bookingForm').addEventListener('submit', function (e) {
       e.preventDefault();
+
+      // Clear previous errors
+      this.querySelectorAll('.field-error').forEach(el => el.remove());
+      this.querySelectorAll('.error').forEach(el => el.classList.remove('error'));
+
+      let valid = true;
+
+      function showError(field, msg) {
+        field.classList.add('error');
+        const err = document.createElement('span');
+        err.className = 'field-error';
+        err.textContent = msg;
+        field.parentNode.appendChild(err);
+        valid = false;
+      }
+
+      // Name
+      const name = document.getElementById('b-name');
+      if (!name.value.trim()) showError(name, 'Please enter your full name.');
+
+      // Phone — must be at least 10 digits
+      const phone = document.getElementById('b-phone');
+      const digits = phone.value.replace(/\D/g, '');
+      if (!phone.value.trim()) {
+        showError(phone, 'Please enter your phone number.');
+      } else if (digits.length < 10) {
+        showError(phone, 'Please enter a valid 10-digit phone number.');
+      }
+
+      // Event Type
+      const eventType = document.getElementById('eventTypeSelect');
+      if (!eventType.value) showError(eventType, 'Please select a shoot type.');
+
+      // Location
+      const location = this.querySelector('select[name="location"]');
+      if (!location.value) showError(location, 'Please select your city.');
+
+      // Start Time
+      const startTime = document.getElementById('startTime');
+      if (!startTime.value) showError(startTime, 'Please enter a start time.');
+
+      // End Time
+      const endTime = document.getElementById('endTime');
+      if (!endTime.value) showError(endTime, 'Please enter an end time.');
+
+      if (!valid) {
+        const firstError = this.querySelector('.error');
+        if (firstError) firstError.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+
       this.style.display = 'none';
       document.getElementById('bookingSuccess').style.display = 'block';
+    });
+
+    // Clear error state as user corrects each field
+    ['b-name', 'b-phone', 'eventTypeSelect', 'startTime', 'endTime'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('input', function () {
+        this.classList.remove('error');
+        const err = this.parentNode.querySelector('.field-error');
+        if (err) err.remove();
+      });
+    });
+    const locationSelect = document.querySelector('#bookingForm select[name="location"]');
+    if (locationSelect) locationSelect.addEventListener('change', function () {
+      this.classList.remove('error');
+      const err = this.parentNode.querySelector('.field-error');
+      if (err) err.remove();
     });
 
     /* -----------------------------------------------------------
