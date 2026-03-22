@@ -19,6 +19,11 @@
     content="Hyderabad's #1 cinematic reel studio. Viral reels for brands, influencers, cars & events. Book your shoot today.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preconnect" href="https://firestore.googleapis.com">
+  <link rel="preconnect" href="https://www.googleapis.com">
+  <link rel="preconnect" href="https://www.gstatic.com">
+  <link rel="dns-prefetch" href="https://firestore.googleapis.com">
+  <link rel="dns-prefetch" href="https://identitytoolkit.googleapis.com">
   <link
     href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;500;600;700&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&family=Cormorant+Garamond:ital,wght@1,400;1,600&family=Caveat:wght@400;700&family=Great+Vibes&display=swap"
     rel="stylesheet">
@@ -1651,6 +1656,21 @@
     input[type="time"].form-input {
       color-scheme: dark;
     }
+
+    /* ── HIRING: default CLOSED until Firebase confirms open ── */
+    #creatorForm .btn-submit {
+      opacity: 0.4;
+      pointer-events: none;
+      cursor: not-allowed;
+    }
+    #creatorForm.hiring-open .btn-submit {
+      opacity: 1;
+      pointer-events: auto;
+      cursor: pointer;
+    }
+    #hiringBanner { display: block; }
+    #creatorForm.hiring-open + #hiringBanner,
+    #hiringBanner.hiring-hidden { display: none !important; }
 
     .hiring-banner {
       overflow: hidden;
@@ -3539,8 +3559,33 @@
   <!-- ============================================================
      JAVASCRIPT
   ============================================================ -->
-  <script>
+  <script type="module">
     'use strict';
+
+    // ── FIREBASE IMPORTS ──
+    import { initializeApp }        from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js';
+    import {
+      getFirestore, collection, addDoc, doc, onSnapshot, serverTimestamp
+    } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js';
+
+    // ── FIREBASE CONFIG ──
+    // Replace with your actual values
+    // Never commit real keys to GitHub
+    // Use environment variables in production
+    const firebaseConfig = {
+      apiKey:            'AIzaSyCYLgTK6owCnk8Wo_wr8ATTmbI7XqkLtPw',
+      authDomain:        'stvr-website.firebaseapp.com',
+      projectId:         'stvr-website',
+      storageBucket:     'stvr-website.firebasestorage.app',
+      messagingSenderId: '533329033671',
+      appId:             '1:533329033671:web:1b296657225303134f41e2',
+      measurementId:     'G-HDXKHJPFDF'
+    };
+    if (!firebaseConfig.apiKey || firebaseConfig.apiKey === 'YOUR_API_KEY') {
+      console.error('Firebase not configured. Add your Firebase config.');
+    }
+    const _fbApp = initializeApp(firebaseConfig);
+    const db     = getFirestore(_fbApp);
 
     // ── DEV LOGGING ──
     const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -3713,11 +3758,11 @@
 
       function init() {
         pts = [];
-        const isMobile = window.innerWidth < 768;
-        const n = Math.min(
-          isMobile ? 35 : 110,
-          Math.floor(cv.width * cv.height / (isMobile ? 8000 : 9000))
-        );
+        const isMobile  = window.innerWidth < 768;
+        const conn      = navigator.connection;
+        const isSlow    = conn && (conn.effectiveType === '2g' || conn.effectiveType === 'slow-2g' || conn.saveData);
+        const maxCount  = isSlow ? 10 : isMobile ? 30 : 80;
+        const n = Math.min(maxCount, Math.floor(cv.width * cv.height / (isMobile ? 8000 : 9000)));
         for (let i = 0; i < n; i++) pts.push(new Pt());
       }
 
@@ -3855,10 +3900,14 @@
 
     tcModal.addEventListener('click', closeTCModal);
 
+    // Expose to global scope (required for inline onclick handlers in HTML)
+    window.openTCModal  = openTCModal;
+    window.closeTCModal = closeTCModal;
+
     /* -----------------------------------------------------------
        CREATOR FORM
     ----------------------------------------------------------- */
-    document.getElementById('creatorForm').addEventListener('submit', function (e) {
+    document.getElementById('creatorForm').addEventListener('submit', async function (e) {
       e.preventDefault();
       
       this.querySelectorAll('.field-error').forEach(el => el.remove());
@@ -3874,18 +3923,33 @@
         return;
       }
       
-      const cSubmitBtn = this.querySelector('.btn-submit');
-      setButtonLoading(cSubmitBtn, true, 'Submitting...');
-      setTimeout(() => {
-        this.style.display = 'none';
-        document.getElementById('creatorSuccess').style.display = 'block';
-      }, 300);
+      // Show success immediately
+      this.style.display = 'none';
+      document.getElementById('creatorSuccess').style.display = 'block';
+
+      // Save to Firestore in background
+      (async () => {
+        try {
+          await addDoc(collection(db, 'creator_applications'), {
+            name:          document.getElementById('c-name')?.value.trim() || '',
+            phone:         document.getElementById('c-phone')?.value.replace(/\D/g,'') || '',
+            email:         document.getElementById('c-email')?.value.trim() || '',
+            instagramLink: document.getElementById('c-insta')?.value.trim() || '',
+            city:          document.getElementById('c-city')?.value || '',
+            status:        'pending',
+            appliedAt:     serverTimestamp(),
+            source:        'website'
+          });
+        } catch(err) {
+          console.error('Application save failed:', err.code, err.message);
+        }
+      })();
     });
 
     /* -----------------------------------------------------------
        BOOKING FORM
     ----------------------------------------------------------- */
-    document.getElementById('bookingForm').addEventListener('submit', function (e) {
+    document.getElementById('bookingForm').addEventListener('submit', async function (e) {
       e.preventDefault();
 
       // Clear previous errors
@@ -3960,14 +4024,64 @@
         return;
       }
 
-      const submitBtn = this.querySelector('.btn-submit');
-      setButtonLoading(submitBtn, true, 'Submitting...');
+      // ── STEP 1: Show success IMMEDIATELY (0ms wait) ──
+      const msgEl = document.getElementById('b-message') || document.getElementById('b-msg');
+      const durEl = document.getElementById('durationValue');
 
-      // Small timeout to show loading state
-      setTimeout(() => {
-        this.style.display = 'none';
-        document.getElementById('bookingSuccess').style.display = 'block';
-      }, 300);
+      const bookingData = {
+        id:                'local_' + Date.now(),
+        name:              nameVal,
+        phone:             phoneRaw,
+        email:             '',
+        package:           eventType ? eventType.value : '',
+        packageName:       eventType ? (eventType.options[eventType.selectedIndex]?.text || '') : '',
+        location:          location ? location.value : '',
+        date:              dateEl ? dateEl.value : '',
+        startTime:         startTime ? startTime.value : '',
+        endTime:           endTime ? endTime.value : '',
+        duration:          durEl ? durEl.value : '',
+        notes:             msgEl ? msgEl.value.trim() : '',
+        totalAmount:       0,
+        status:            'New',
+        creatorStatus:     'unassigned',
+        assignedCreator:   null,
+        assignedCreatorName: null,
+        reelLink:          null,
+        reelReceived:      false,
+        creatorPaid:       false,
+        creatorEarnings:   0,
+        bookingPaid:       false,
+        finalPaid:         false,
+        source:            'website',
+        createdAt:         new Date().toISOString(),
+        synced:            false
+      };
+
+      // Save to localStorage instantly
+      const localBookings = safeGetStorage('stvr_bookings', []);
+      localBookings.unshift(bookingData);
+      localStorage.setItem('stvr_bookings', JSON.stringify(localBookings));
+
+      // Show success now — user sees confirmation in <100ms
+      this.style.display = 'none';
+      document.getElementById('bookingSuccess').style.display = 'block';
+
+      // ── STEP 2: Save to Firestore in background (user doesn't wait) ──
+      (async () => {
+        try {
+          const fsData = { ...bookingData, createdAt: serverTimestamp(), synced: true };
+          delete fsData.id;
+          const ref = await addDoc(collection(db, 'bookings'), fsData);
+          // Update localStorage entry with real Firestore ID
+          const stored = safeGetStorage('stvr_bookings', []);
+          const idx = stored.findIndex(b => b.id === bookingData.id);
+          if (idx !== -1) { stored[idx].id = ref.id; stored[idx].synced = true; localStorage.setItem('stvr_bookings', JSON.stringify(stored)); }
+          devLog('Booking saved to Firestore:', ref.id);
+        } catch(err) {
+          console.error('Firestore booking save failed:', err.code, err.message);
+          localStorage.setItem('stvr_pending_sync', 'true');
+        }
+      })();
     });
 
     // Clear error state as user corrects each field
@@ -3987,25 +4101,63 @@
     });
 
     /* -----------------------------------------------------------
-       HIRING TOGGLE (Admin Control)
-       Set hiringOpen = true  to open applications
-       Set hiringOpen = false to show "not hiring" banner
+       RETRY UNSYNCED BOOKINGS ON LOAD
     ----------------------------------------------------------- */
-    const hiringOpen = false;
-    const hiringBanner = document.getElementById('hiringBanner');
-    const creatorFormFields = document.getElementById('creatorForm');
-
-    if (hiringOpen) {
-      if (hiringBanner) hiringBanner.style.display = 'none';
-    } else {
-      const submitBtn = creatorFormFields.querySelector('.btn-submit');
-      if (submitBtn) {
-        submitBtn.disabled = true;
-        submitBtn.style.opacity = '0.4';
-        submitBtn.style.cursor = 'not-allowed';
-        submitBtn.textContent = 'Applications Closed';
+    (async function retrySyncOnLoad() {
+      if (!localStorage.getItem('stvr_pending_sync')) return;
+      const bookings = safeGetStorage('stvr_bookings', []);
+      const unsynced = bookings.filter(b => !b.synced && String(b.id).startsWith('local_'));
+      if (!unsynced.length) { localStorage.removeItem('stvr_pending_sync'); return; }
+      devLog('Retrying', unsynced.length, 'unsynced bookings...');
+      for (const b of unsynced) {
+        try {
+          const data = { ...b, createdAt: serverTimestamp(), synced: true };
+          delete data.id;
+          const ref = await addDoc(collection(db, 'bookings'), data);
+          b.id = ref.id; b.synced = true;
+        } catch(e) { devLog('Retry failed:', b.id); }
       }
+      localStorage.setItem('stvr_bookings', JSON.stringify(bookings));
+      localStorage.removeItem('stvr_pending_sync');
+    })();
+
+    /* -----------------------------------------------------------
+       HIRING TOGGLE — default CLOSED (CSS), Firebase opens it
+    ----------------------------------------------------------- */
+    function applyHiringStatus(isOpen) {
+      const form   = document.getElementById('creatorForm');
+      const banner = document.getElementById('hiringBanner');
+      const btn    = form ? form.querySelector('.btn-submit') : null;
+      if (isOpen) {
+        form && form.classList.add('hiring-open');
+        if (banner) banner.classList.add('hiring-hidden');
+        if (btn) { btn.disabled = false; btn.style.cssText = ''; btn.textContent = 'Submit Application'; }
+      } else {
+        form && form.classList.remove('hiring-open');
+        if (banner) banner.classList.remove('hiring-hidden');
+        if (btn) { btn.disabled = true; btn.textContent = 'Applications Closed'; }
+      }
+      localStorage.setItem('stvr_hiring_cached', String(isOpen));
+      localStorage.setItem('stvr_hiring_cache_time', String(Date.now()));
     }
+
+    (function initHiringToggle() {
+      // Apply cache instantly (no flicker)
+      const cached    = localStorage.getItem('stvr_hiring_cached');
+      const cacheTime = parseInt(localStorage.getItem('stvr_hiring_cache_time') || '0');
+      if (cached !== null && (Date.now() - cacheTime) < 300000) {
+        applyHiringStatus(cached === 'true');
+      }
+      // Then sync live from Firestore
+      try {
+        onSnapshot(doc(db, 'settings', 'hiring'), snap => {
+          const isOpen = snap.exists() ? (snap.data().isOpen ?? snap.data().open ?? false) : false;
+          applyHiringStatus(isOpen);
+        }, () => {
+          if (cached !== null) applyHiringStatus(cached === 'true');
+        });
+      } catch(e) { /* keep CSS default (closed) */ }
+    })();
 
     /* -----------------------------------------------------------
        DURATION TAB TOGGLE

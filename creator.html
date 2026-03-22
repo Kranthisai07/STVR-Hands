@@ -378,6 +378,10 @@ button,a,[role="button"],.card,.btn,.nav-tab,.sub-tab,.f-btn{touch-action:manipu
 #new-shoot-banner{position:fixed;top:var(--header-h);left:0;right:0;z-index:200;background:linear-gradient(90deg,rgba(56,189,248,.95),rgba(14,165,233,.95));color:#05080f;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:14px;letter-spacing:.5px;padding:10px 16px;display:none;align-items:center;justify-content:space-between;gap:10px;box-shadow:0 4px 20px rgba(56,189,248,.3);cursor:pointer}
 #new-shoot-banner.show{display:flex}
 #new-shoot-banner .nsbtn{background:rgba(0,0,0,.15);border:none;color:#05080f;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:13px;padding:4px 12px;border-radius:20px;cursor:pointer;white-space:nowrap}
+
+/* ── SKELETON LOADING ── */
+.skeleton{background:linear-gradient(90deg,rgba(56,189,248,.05) 0%,rgba(56,189,248,.12) 50%,rgba(56,189,248,.05) 100%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:8px;pointer-events:none;}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
 </style>
 </head>
 <body>
@@ -654,7 +658,7 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.0/firebas
 import {
   getFirestore, collection, addDoc, getDocs, getDoc, setDoc,
   updateDoc, deleteDoc, doc, query, orderBy, onSnapshot,
-  serverTimestamp, where
+  serverTimestamp, where, limit
 } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js';
 
 /*
@@ -841,32 +845,59 @@ async function doLogin() {
   const btn   = $('login-btn');
   errEl.textContent = '';
 
-  if (raw.length !== 10 || !/^[6-9]\d{9}$/.test(raw)) {
+  // 1. Validate format instantly
+  if (!/^[6-9]\d{9}$/.test(raw)) {
     setLoginError('Please enter a valid Indian 10-digit mobile number.');
     return;
   }
 
+  // 2. Check localStorage cache first (instant — no network)
+  const cachedList = safeGetStorage('stvr_creator_cache', []);
+  const cached = cachedList.find(c => c.phone === raw);
+  if (cached) {
+    // Login instantly from cache
+    _creator = cached;
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(cached));
+    $('login-screen').classList.add('fade-out');
+    setTimeout(() => { $('login-screen').style.display = 'none'; startApp(); }, 480);
+    // Verify in background silently
+    (async () => {
+      try {
+        const snap = await getDocs(query(collection(db, 'creators'), where('phone', '==', raw), limit(1)));
+        if (snap.empty) { doLogout(); setLoginError('Access revoked. Contact Bharath.'); }
+        else {
+          const fresh = { id: snap.docs[0].id, ...snap.docs[0].data() };
+          _creator = fresh;
+          const updated = cachedList.map(c => c.phone === raw ? fresh : c);
+          localStorage.setItem('stvr_creator_cache', JSON.stringify(updated));
+          sessionStorage.setItem(SESSION_KEY, JSON.stringify(fresh));
+        }
+      } catch(e) { devLog('Background verify failed:', e); }
+    })();
+    return;
+  }
+
+  // 3. Not in cache — query Firestore
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>';
 
   try {
-    const snap = await getDocs(query(collection(db, 'creators'), where('phone', '==', raw)));
+    const snap = await getDocs(query(collection(db, 'creators'), where('phone', '==', raw), limit(1)));
     if (snap.empty) {
       setLoginError('Phone number not registered. Contact Bharath to get access.');
       resetLoginBtn(); return;
     }
-
-    const docRef = snap.docs[0];
-    _creator = { id: docRef.id, ...docRef.data() };
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify({
-      id: _creator.id, name: _creator.name,
-      phone: _creator.phone, city: _creator.city
-    }));
-
+    const creator = { id: snap.docs[0].id, ...snap.docs[0].data() };
+    // Cache for next login
+    const all = safeGetStorage('stvr_creator_cache', []);
+    if (!all.find(c => c.id === creator.id)) { all.push(creator); localStorage.setItem('stvr_creator_cache', JSON.stringify(all)); }
+    _creator = creator;
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(creator));
+    resetLoginBtn();
     $('login-screen').classList.add('fade-out');
     setTimeout(() => { $('login-screen').style.display = 'none'; startApp(); }, 480);
-
   } catch (err) {
+    if (!navigator.onLine && cached) { _creator = cached; sessionStorage.setItem(SESSION_KEY, JSON.stringify(cached)); $('login-screen').classList.add('fade-out'); setTimeout(() => { $('login-screen').style.display = 'none'; startApp(); }, 480); return; }
     setLoginError('Connection error. Please try again.');
     devLog('Login error:', err);
     resetLoginBtn();
@@ -959,6 +990,20 @@ async function loadCreatorData() {
 function startBookingsListener() {
   if (_unsub) _unsub();
   _shootsInitialLoad = true;
+
+  // Show cached shoots instantly
+  const cachedBookings = safeGetStorage('stvr_my_bookings_' + _creator.id, []);
+  if (cachedBookings.length > 0) {
+    _bookings = cachedBookings;
+    renderAll();
+  } else {
+    // Show skeleton for shoot cards
+    const shootsEl = $('sp-pending');
+    if (shootsEl) shootsEl.innerHTML = `
+      <div class="skeleton" style="height:180px;border-radius:16px;margin-bottom:1rem"></div>
+      <div class="skeleton" style="height:180px;border-radius:16px;margin-bottom:1rem"></div>`;
+  }
+
   const q = query(collection(db, 'bookings'), where('assignedCreator', '==', _creator.id));
   _unsub = onSnapshot(q, snap => {
     // detect new assignments (not on initial load)
@@ -981,6 +1026,8 @@ function startBookingsListener() {
     _shootsInitialLoad = false;
     _bookings = snap.docs.map(d => ({ id: d.id, ...d.data(), createdAt: d.data().createdAt?.toMillis?.() || 0 }));
     renderAll();
+    // Cache shoots for instant next load
+    try { localStorage.setItem('stvr_my_bookings_' + _creator.id, JSON.stringify(_bookings.slice(0, 50))); } catch(e) {}
   }, err => {
     showToast('Error loading shoots. Pull to refresh.', 'error');
     devLog('Bookings listener error:', err);
@@ -1144,6 +1191,12 @@ async function confirmAccept(id) {
   const btn = $('accept-ok-btn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Processing\u2026';
+  // Optimistic: update UI instantly
+  showToast('Shoot accepted! \uD83C\uDFAC Bharath will send you location details.', 'success');
+  closeModal('modal-accept');
+  addNotif(`You accepted the shoot on ${fmtDate(b.date)}.`);
+  const msg = `Hi Bharath! I have accepted the shoot for ${fmtDate(b.date)} at ${fmtTime(b.startTime)} in ${b.location}. I\u2019ll be ready!\n\u2014 ${_creator.name}`;
+  window.open(`https://wa.me/${BHARATH_WA}?text=${encodeURIComponent(msg)}`, '_blank');
   try {
     await updateDoc(doc(db, 'bookings', id), {
       creatorStatus: 'accepted',
@@ -1151,12 +1204,7 @@ async function confirmAccept(id) {
       creatorAcceptedAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
-    closeModal('modal-accept');
-    showToast('Shoot accepted! Bharath will send you location details.', 'success');
-    addNotif(`You accepted the shoot on ${fmtDate(b.date)}.`);
-    const msg = `Hi Bharath! I have accepted the shoot for ${fmtDate(b.date)} at ${fmtTime(b.startTime)} in ${b.location}. I\u2019ll be ready!\n\u2014 ${_creator.name}`;
-    window.open(`https://wa.me/${BHARATH_WA}?text=${encodeURIComponent(msg)}`, '_blank');
-  } catch (e) { showToast('Error accepting shoot. Try again.', 'error'); devLog('Accept error:', e); }
+  } catch (e) { showToast('Error saving acceptance. Will retry on next sync.', 'error'); devLog('Accept error:', e); }
   btn.disabled = false;
   btn.innerHTML = '&#x2705; Yes, I Accept';
 }
@@ -1183,6 +1231,11 @@ async function confirmReject(id) {
   const btn    = $('reject-ok-btn');
   btn.disabled = true;
   btn.textContent = 'Processing\u2026';
+  // Optimistic: update UI instantly
+  showToast('Shoot declined.', 'success');
+  closeModal('modal-reject');
+  const msg = `Hi Bharath! Sorry I can\u2019t make the shoot on ${fmtDate(b.date)} at ${fmtTime(b.startTime)}.\nReason: ${reason}\nPlease reassign.\n\u2014 ${_creator.name}`;
+  window.open(`https://wa.me/${BHARATH_WA}?text=${encodeURIComponent(msg)}`, '_blank');
   try {
     await updateDoc(doc(db, 'bookings', id), {
       creatorStatus: 'rejected',
@@ -1192,10 +1245,6 @@ async function confirmReject(id) {
       status: 'New',
       updatedAt: serverTimestamp()
     });
-    closeModal('modal-reject');
-    showToast('Rejection sent. Bharath will reassign this shoot.', 'info');
-    const msg = `Hi Bharath! Sorry I can\u2019t make the shoot on ${fmtDate(b.date)} at ${fmtTime(b.startTime)}.\nReason: ${reason}\nPlease reassign.\n\u2014 ${_creator.name}`;
-    window.open(`https://wa.me/${BHARATH_WA}?text=${encodeURIComponent(msg)}`, '_blank');
   } catch (e) { showToast('Error sending rejection. Try again.', 'error'); devLog('Reject error:', e); }
   btn.disabled = false;
   btn.textContent = 'Confirm Rejection';
@@ -1230,18 +1279,23 @@ async function submitReel(id) {
     btn.innerHTML = '&#x1F4E4; Submit Reel';
     return;
   }
+  // Instant feedback before network call
+  showToast('Reel submitted! Bharath will review and process payment.', 'success');
+  closeModal('modal-reel');
+  addNotif('Your reel has been submitted successfully!');
+  const msg = `Hi Bharath! I\u2019ve submitted the reel for the ${fmtDate(b.date)} shoot.\nDrive Link: ${url}\nPlease review!\n\u2014 ${_creator.name}`;
+  window.open(`https://wa.me/${BHARATH_WA}?text=${encodeURIComponent(msg)}`, '_blank');
   try {
     await updateDoc(doc(db, 'bookings', id), {
       reelLink: url, reelReceived: true,
       reelSubmittedAt: serverTimestamp(),
       status: 'Reel Ready', updatedAt: serverTimestamp()
     });
-    closeModal('modal-reel');
-    showToast('Reel submitted! Bharath will review and process payment.', 'success');
-    addNotif('Your reel has been submitted successfully!');
-    const msg = `Hi Bharath! I\u2019ve submitted the reel for the ${fmtDate(b.date)} shoot.\nDrive Link: ${url}\nPlease review!\n\u2014 ${_creator.name}`;
-    window.open(`https://wa.me/${BHARATH_WA}?text=${encodeURIComponent(msg)}`, '_blank');
-  } catch (e) { showToast('Error submitting reel. Try again.', 'error'); devLog('Reel submit error:', e); }
+  } catch (e) {
+    localStorage.setItem('stvr_pending_reel_' + id, JSON.stringify({ link: url, bookingId: id }));
+    localStorage.setItem('stvr_pending_sync', 'true');
+    console.error('Reel save failed:', e);
+  }
   btn.disabled = false;
   btn.innerHTML = '&#x1F4E4; Submit Reel';
 }
